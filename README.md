@@ -25,7 +25,7 @@ Telegram бот для мониторинга статистики AmneziaWG VPN
 
 ## ⚡ Быстрая установка
 
-Одна команда для установки:
+### Одна команда (рекомендуется)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/A1-EVO/WG_STAT_BOT/main/setup.py | sudo python3
+curl -fsSL https://raw.githubusercontent.com/A1-EVO/WG_STAT_BOT/main/install.sh | sudo bash
