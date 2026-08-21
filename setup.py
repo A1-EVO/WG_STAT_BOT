@@ -17,14 +17,17 @@ class Colors:
     RESET = '\033[0m'
     BOLD = '\033[1m'
 
+def clear_screen():
+    """Очистка экрана"""
+    os.system('clear' if os.name != 'nt' else 'cls')
+
 def input_tty(prompt=''):
-    """Читает ввод напрямую из терминала, обходя занятый stdin"""
+    """Читает ввод напрямую из терминала"""
     print(prompt, end='', flush=True)
     try:
         with open('/dev/tty', 'r') as tty:
             return tty.readline().rstrip('\n')
     except:
-        # Fallback на обычный input если /dev/tty недоступен
         return input(prompt)
 
 def print_status(status, message):
@@ -102,7 +105,6 @@ def install_dependencies():
 def create_bot_file(token):
     print_status('info', '\n📝 Создание файла бота...')
     
-    # Скачиваем bot.py из репозитория
     bot_path = Path(BOT_DIR) / 'bot.py'
     try:
         result = subprocess.run(
@@ -119,10 +121,7 @@ def create_bot_file(token):
     except:
         pass
     
-    # Fallback: встроенный код
-    print_status('warning', '⚠ Не удалось скачать bot.py из репозитория, используем встроенный')
-    # ... здесь весь код бота как раньше ...
-    print_status('error', '✗ Встроенный код бота не реализован в этой версии')
+    print_status('error', '✗ Не удалось скачать bot.py из репозитория')
     sys.exit(1)
 
 def create_service_file():
@@ -215,16 +214,24 @@ def show_menu():
         print("6. ❌ Выход")
         return ['toggle', 'reinstall', 'uninstall', 'status', 'logs', 'exit']
 
+def wait_for_enter():
+    """Ждёт нажатия Enter и очищает экран"""
+    input_tty("\nНажмите Enter для продолжения...")
+    clear_screen()
+
 def main():
     if os.geteuid() != 0:
         print_status('error', '✗ Скрипт должен быть запущен от root')
         sys.exit(1)
+    
+    clear_screen()
     
     while True:
         options = show_menu()
         choice = input_tty("\nВыберите действие: ").strip()
         
         if not choice:
+            clear_screen()
             continue
         
         if choice in ['exit', str(len(options))]:
@@ -235,6 +242,7 @@ def main():
             idx = int(choice) - 1
             if idx < 0 or idx >= len(options):
                 print_status('error', '✗ Неверный выбор')
+                wait_for_enter()
                 continue
             action = options[idx]
         except ValueError:
@@ -242,11 +250,13 @@ def main():
         
         if action == 'install':
             if not check_requirements():
+                wait_for_enter()
                 continue
             
             token = input_tty("\nВведите токен Telegram бота: ").strip()
             if not token:
                 print_status('error', '✗ Токен не может быть пустым')
+                wait_for_enter()
                 continue
             
             install_dependencies()
@@ -255,6 +265,7 @@ def main():
             install_service()
             
             print_status('ok', '\n✅ Установка завершена!')
+            wait_for_enter()
         
         elif action == 'toggle':
             status = get_service_status()
@@ -264,6 +275,7 @@ def main():
             else:
                 subprocess.run(['systemctl', 'stop', 'amnezia-bot'])
                 print_status('ok', '✓ Бот остановлен')
+            wait_for_enter()
         
         elif action == 'reinstall':
             print_status('warning', '\n⚠️  Это удалит текущую установку')
@@ -274,10 +286,12 @@ def main():
                     shutil.rmtree(BOT_DIR)
                 
                 if not check_requirements():
+                    wait_for_enter()
                     continue
                 
                 token = input_tty("\nВведите токен Telegram бота: ").strip()
                 if not token:
+                    wait_for_enter()
                     continue
                 
                 install_dependencies()
@@ -286,6 +300,7 @@ def main():
                 install_service()
                 
                 print_status('ok', '\n✅ Переустановка завершена!')
+            wait_for_enter()
         
         elif action == 'uninstall':
             print_status('warning', '\n⚠️  Это полностью удалит бота и все бекапы')
@@ -293,19 +308,22 @@ def main():
             if confirm == 'y':
                 uninstall_all()
                 print_status('ok', '\n✅ Удаление завершено!')
+            wait_for_enter()
         
         elif action == 'status':
             subprocess.run(['systemctl', 'status', 'amnezia-bot', '--no-pager', '-l'])
-            input_tty("\nНажмите Enter для продолжения...")
+            wait_for_enter()
         
         elif action == 'logs':
             try:
                 subprocess.run(['journalctl', '-u', 'amnezia-bot', '-f', '--no-pager'])
             except KeyboardInterrupt:
                 pass
+            wait_for_enter()
         
         else:
             print_status('error', '✗ Неверный выбор')
+            wait_for_enter()
 
 if __name__ == '__main__':
     try:
