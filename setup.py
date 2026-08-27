@@ -3,12 +3,14 @@ import os
 import sys
 import subprocess
 import shutil
+import time
 from pathlib import Path
 
 BOT_DIR = '/opt/amnezia-bot'
 SERVICE_FILE = '/etc/systemd/system/amnezia-bot.service'
 BACKUP_DIR = f'{BOT_DIR}/backups'
 TEMPLATE_URL = 'https://raw.githubusercontent.com/A1-EVO/WG_STAT_BOT/main/bot.py.template'
+
 
 class Colors:
     GREEN = '\033[92m'
@@ -18,8 +20,10 @@ class Colors:
     RESET = '\033[0m'
     BOLD = '\033[1m'
 
+
 def clear_screen():
     os.system('clear' if os.name != 'nt' else 'cls')
+
 
 def input_tty(prompt=''):
     print(prompt, end='', flush=True)
@@ -28,6 +32,7 @@ def input_tty(prompt=''):
             return tty.readline().rstrip('\n')
     except Exception:
         return input(prompt)
+
 
 def print_status(status, message):
     colors = {
@@ -39,8 +44,10 @@ def print_status(status, message):
     color = colors.get(status, Colors.RESET)
     print(f"{color}{message}{Colors.RESET}")
 
+
 def check_service_installed():
     return os.path.exists(SERVICE_FILE) and os.path.exists(BOT_DIR)
+
 
 def get_service_status():
     if not check_service_installed():
@@ -54,11 +61,35 @@ def get_service_status():
     except Exception:
         return 'error'
 
+
+def download_file(url, dest_path):
+    if shutil.which('curl'):
+        result = subprocess.run(
+            ['curl', '-fsSL', '--connect-timeout', '10', '--max-time', '30', url, '-o', dest_path],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0 and os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
+            return True, None
+        err = result.stderr.strip() or f"curl exit code {result.returncode}"
+    else:
+        err = "curl not found"
+
+    if shutil.which('wget'):
+        result = subprocess.run(
+            ['wget', '-q', '--timeout=10', '-O', dest_path, url],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0 and os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
+            return True, None
+        err = result.stderr.strip() or f"wget exit code {result.returncode}"
+
+    return False, err
+
+
 def check_requirements():
     print_status('info', '\n🔍 Проверка зависимостей...')
     ok = True
 
-    # Docker
     try:
         subprocess.run(['docker', '--version'], capture_output=True, check=True)
         print_status('ok', '✓ Docker установлен')
@@ -66,7 +97,6 @@ def check_requirements():
         print_status('error', '✗ Docker не установлен')
         ok = False
 
-    # Контейнер
     try:
         result = subprocess.run(
             ['docker', 'ps', '-a', '--filter', 'name=amnezia-awg2', '--format', '{{.Names}}'],
@@ -79,7 +109,6 @@ def check_requirements():
     except Exception:
         print_status('warning', '⚠ Не удалось проверить контейнер')
 
-    # Python3
     try:
         subprocess.run(['python3', '--version'], capture_output=True, check=True)
         print_status('ok', '✓ Python3 установлен')
@@ -87,44 +116,18 @@ def check_requirements():
         print_status('error', '✗ Python3 не установлен')
         ok = False
 
-    # curl или wget
     has_curl = shutil.which('curl') is not None
     has_wget = shutil.which('wget') is not None
     if has_curl:
         print_status('ok', '✓ curl найден')
     elif has_wget:
-        print_status('ok', '✓ wget найден (будет использован вместо curl)')
+        print_status('ok', '✓ wget найден')
     else:
         print_status('error', '✗ Ни curl ни wget не найдены. Установите: apt install -y curl')
         ok = False
 
     return ok
 
-def download_file(url, dest_path):
-    """Скачивает файл через curl или wget"""
-    # Пробуем curl
-    if shutil.which('curl'):
-        result = subprocess.run(
-            ['curl', '-fsSL', '--connect-timeout', '10', '--max-time', '30', url, '-o', dest_path],
-            capture_output=True, text=True
-        )
-        if result.returncode == 0 and os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
-            return True, None
-        err = result.stderr.strip() or f"curl exit code {result.returncode}"
-    else:
-        err = "curl not found"
-
-    # Пробуем wget
-    if shutil.which('wget'):
-        result = subprocess.run(
-            ['wget', '-q', '--timeout=10', '-O', dest_path, url],
-            capture_output=True, text=True
-        )
-        if result.returncode == 0 and os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
-            return True, None
-        err = result.stderr.strip() or f"wget exit code {result.returncode}"
-
-    return False, err
 
 def install_dependencies():
     print_status('info', '\n📦 Установка зависимостей...')
@@ -132,30 +135,73 @@ def install_dependencies():
     os.makedirs(BOT_DIR, exist_ok=True)
     os.makedirs(BACKUP_DIR, exist_ok=True)
 
+    # Проверка ensurepip
+    result = subprocess.run(
+        [sys.executable, '-m', 'ensurepip', '--version'],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print_status('warning', '⚠ python3-venv не установлен, устанавливаю...')
+        py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+        pkg_name = f"python{py_ver}-venv"
+
+        subprocess.run(['apt-get', 'update', '-qq'], capture_output=True)
+
+        apt_result = subprocess.run(
+            ['apt-get', 'install', '-y', '-qq', pkg_name],
+            capture_output=True, text=True
+        )
+        if apt_result.returncode != 0:
+            apt_result = subprocess.run(
+                ['apt-get', 'install', '-y', '-qq', 'python3-venv'],
+                capture_output=True, text=True
+            )
+            if apt_result.returncode != 0:
+                print_status('error', f'✗ Не удалось установить {pkg_name}')
+                print_status('error', f'   Установите вручную: apt install -y {pkg_name}')
+                return False
+
+        print_status('ok', f'✓ {pkg_name} установлен')
+
+    # Создание venv
     venv_path = Path(BOT_DIR) / 'venv'
     if not venv_path.exists():
         print_status('info', '   Создание virtual environment...')
-        subprocess.run([sys.executable, '-m', 'venv', str(venv_path)], check=True)
+        result = subprocess.run(
+            [sys.executable, '-m', 'venv', str(venv_path)],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print_status('error', f'✗ Не удалось создать venv:')
+            print_status('error', result.stderr.strip())
+            return False
         print_status('ok', '✓ Virtual environment создан')
     else:
         print_status('ok', '✓ Virtual environment уже существует')
 
     pip_path = str(venv_path / 'bin' / 'pip')
 
+    if not os.path.exists(pip_path):
+        print_status('error', f'✗ pip не найден: {pip_path}')
+        print_status('info', '   Удалите и попробуйте снова: rm -rf /opt/amnezia-bot')
+        return False
+
     print_status('info', '   Обновление pip...')
     subprocess.run([pip_path, 'install', '--upgrade', 'pip'], capture_output=True)
 
-    print_status('info', '   Установка python-telegram-bot...')
+    print_status('info', '   Установка python-telegram-bot (1-2 минуты)...')
     result = subprocess.run(
         [pip_path, 'install', 'python-telegram-bot==22.8'],
         capture_output=True, text=True
     )
     if result.returncode != 0:
-        print_status('error', f'✗ Ошибка установки пакетов:\n{result.stderr}')
+        print_status('error', f'✗ Ошибка установки:')
+        print_status('error', result.stderr.strip()[-500:])
         return False
 
     print_status('ok', '✓ Зависимости установлены')
     return True
+
 
 def create_bot_file(token):
     print_status('info', '\n📝 Создание файла бота...')
@@ -163,21 +209,16 @@ def create_bot_file(token):
     bot_path = Path(BOT_DIR) / 'bot.py'
     tmp_template = '/tmp/_bot_template.py'
 
-    # Скачиваем шаблон
-    print_status('info', f'   Скачивание шаблона из GitHub...')
+    print_status('info', '   Скачивание шаблона из GitHub...')
     ok, err = download_file(TEMPLATE_URL, tmp_template)
 
     if not ok:
         print_status('error', f'✗ Не удалось скачать bot.py.template: {err}')
-        print_status('error', '   Проверьте:')
-        print_status('error', '   1. Доступность интернета: curl -I https://raw.githubusercontent.com')
-        print_status('error', '   2. Наличие curl/wget: apt install -y curl')
-        print_status('error', '   3. Файл существует в репозитории: https://github.com/A1-EVO/WG_STAT_BOT')
+        print_status('error', '   Проверьте доступность: curl -I https://raw.githubusercontent.com')
         if os.path.exists(tmp_template):
             os.unlink(tmp_template)
         return False
 
-    # Подставляем токен
     try:
         with open(tmp_template, 'r') as f:
             bot_code = f.read()
@@ -203,6 +244,7 @@ def create_bot_file(token):
             os.unlink(tmp_template)
         return False
 
+
 def create_service_file():
     print_status('info', '\n⚙️  Создание systemd сервиса...')
 
@@ -227,6 +269,7 @@ WantedBy=multi-user.target
 
     print_status('ok', '✓ Systemd service создан')
 
+
 def install_service():
     print_status('info', '\n🚀 Установка сервиса...')
 
@@ -234,8 +277,6 @@ def install_service():
     subprocess.run(['systemctl', 'enable', 'amnezia-bot'], check=True)
     subprocess.run(['systemctl', 'start', 'amnezia-bot'], check=True)
 
-    # Проверяем что сервис реально запустился
-    import time
     time.sleep(2)
     status = get_service_status()
     if status == 'running':
@@ -243,6 +284,7 @@ def install_service():
     else:
         print_status('warning', f'⚠ Сервис создан, но статус: {status}')
         print_status('info', '   Проверьте логи: journalctl -u amnezia-bot -n 20 --no-pager')
+
 
 def uninstall_service():
     print_status('info', '\n🗑️  Удаление сервиса...')
@@ -256,11 +298,13 @@ def uninstall_service():
     subprocess.run(['systemctl', 'daemon-reload'], capture_output=True)
     print_status('ok', '✓ Сервис удален')
 
+
 def uninstall_all():
     uninstall_service()
     if os.path.exists(BOT_DIR):
         shutil.rmtree(BOT_DIR)
         print_status('ok', '✓ Директория бота удалена')
+
 
 def show_menu():
     status = get_service_status()
@@ -300,9 +344,11 @@ def show_menu():
         print("6. ❌ Выход")
         return ['toggle', 'reinstall', 'uninstall', 'status', 'logs', 'exit']
 
+
 def wait_for_enter():
     input_tty("\nНажмите Enter для продолжения...")
     clear_screen()
+
 
 def main():
     if os.geteuid() != 0:
